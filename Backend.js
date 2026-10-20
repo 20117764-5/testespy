@@ -5,6 +5,11 @@ const app = express();
 
 app.use(express.json({ limit: '10mb' }));
 
+app.get('/test', (req, res) => {
+    console.log("=== ENDPOINT /TEST ACESSADO ===");
+    res.json({ status: 'ok', message: 'Backend está funcionando', timestamp: new Date().toISOString() });
+});
+
 // Use as variáveis de ambiente, com fallback para desenvolvimento local
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://qakdwubbzrkiojwgcyry.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFha2R3dWJienJraW9qd2djeXJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI1MDcwNTEsImV4cCI6MjEwODA4MzA1MX0.YRRpbJiwTZ4JVmCF3E-tq4FwJOE96rhAVq0pOav7AVA';
