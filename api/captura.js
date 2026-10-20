@@ -2,7 +2,16 @@ require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
 const { randomUUID } = require('crypto');
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://qakdwubbzrkiojwgcyry.supabase.co';
+const PROJECT_ORIGIN = 'https://qakdwubbzrkiojwgcyry.supabase.co';
+const configuredUrl = (process.env.SUPABASE_URL || PROJECT_ORIGIN).trim();
+const parsedUrl = new URL(configuredUrl);
+if (parsedUrl.origin !== PROJECT_ORIGIN) {
+    throw new Error('SUPABASE_URL aponta para outro projeto; confira a variável na Vercel.');
+}
+if (parsedUrl.pathname !== '/' || parsedUrl.search || parsedUrl.hash) {
+    console.warn('SUPABASE_URL contém caminho ou parâmetros extras; usando apenas a URL base do projeto.');
+}
+const SUPABASE_URL = parsedUrl.origin;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFha2R3dWJienJraW9qd2djeXJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI1MDcwNTEsImV4cCI6MjEwODA4MzA1MX0.YRRpbJiwTZ4JVmCF3E-tq4FwJOE96rhAVq0pOav7AVA';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const BUCKET_NAME = 'capturas';
