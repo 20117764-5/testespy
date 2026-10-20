@@ -1,9 +1,9 @@
 {
   "name": "meu-projeto-espionagem",
   "version": "1.0.0",
-  "main": "backend.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node backend.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

