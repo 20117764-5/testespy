@@ -22,13 +22,18 @@ module.exports = async function captura(req, res) {
     }
 
     try {
-        const { facingMode, image, userAgent, screenRes } = req.body || {};
+        const { facingMode, image, userAgent, screenRes, captureIndex } = req.body || {};
+        
+        // Validação de Payload
         if (typeof image !== 'string' || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) {
             return res.status(400).json({ error: 'Imagem JPEG inválida' });
         }
 
         const binaryData = Buffer.from(image.slice('data:image/jpeg;base64,'.length), 'base64');
         if (!binaryData.length) return res.status(400).json({ error: 'Imagem vazia' });
+
+        // Log de Auditoria: Mostra qual câmera foi capturada
+        console.log(`[CAPTURA] #${captureIndex || 'N/A'} | Câmera: ${facingMode} | Tamanho: ${(binaryData.length / 1024).toFixed(1)}KB | UA: ${userAgent?.substring(0, 30)}...`);
 
         const fileName = `cap_${Date.now()}_${randomUUID()}.jpg`;
         const { error: uploadError } = await supabase.storage
@@ -48,12 +53,14 @@ module.exports = async function captura(req, res) {
             .from(BUCKET_NAME)
             .getPublicUrl(fileName);
 
+        // Insere metadados no banco
         const { error: insertError } = await supabase.from('metadados').insert({
             timestamp: new Date().toISOString(),
             facing_mode: facingMode,
             user_agent: userAgent,
             screen_res: screenRes,
-            image_url: publicUrl
+            image_url: publicUrl,
+            capture_index: captureIndex || null
         });
 
         if (insertError) {
