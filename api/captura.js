@@ -33,7 +33,7 @@ module.exports = async function captura(req, res) {
         if (!binaryData.length) return res.status(400).json({ error: 'Imagem vazia' });
 
         // Log de Auditoria: Mostra qual câmera foi capturada
-        console.log(`[CAPTURA] #${captureIndex || 'N/A'} | Câmera: ${facingMode} | Tamanho: ${(binaryData.length / 1024).toFixed(1)}KB | UA: ${userAgent?.substring(0, 30)}...`);
+        console.log(`[CAPTURA] #${captureIndex ?? 'N/A'} | Câmera: ${facingMode} | Tamanho: ${(binaryData.length / 1024).toFixed(1)}KB`);
 
         const fileName = `cap_${Date.now()}_${randomUUID()}.jpg`;
         const { error: uploadError } = await supabase.storage
@@ -59,8 +59,7 @@ module.exports = async function captura(req, res) {
             facing_mode: facingMode,
             user_agent: userAgent,
             screen_res: screenRes,
-            image_url: publicUrl,
-            capture_index: captureIndex || null
+            image_url: publicUrl
         });
 
         if (insertError) {
